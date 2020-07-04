@@ -34,11 +34,26 @@ fn main() {
 
     if *verbose {
         for index in 0..connection_strings.len() {
-            println!("Connection: {} with index {}.", connection_strings[index], index);
+            println!(
+                "Connection: {} with index {}.",
+                connection_strings[index], index
+            );
         }
     }
 
-    let vehicles: Arc<Vec<Arc<RwLock<Box<dyn mavlink::MavConnection + Sync + Send>>>>> = Arc::new(
+    let vehicles: Arc<
+        Vec<
+            Arc<
+                RwLock<
+                    Box<
+                        dyn mavlink::MavConnection<mavlink::ardupilotmega::MavMessage>
+                            + Sync
+                            + Send,
+                    >,
+                >,
+            >,
+        >,
+    > = Arc::new(
         connection_strings
             .iter()
             .map(|&connection_string| {
@@ -71,15 +86,17 @@ fn main() {
                                 }
                             }
                         }
-                        Err(e) => {
-                            match e.kind() {
-                                std::io::ErrorKind::WouldBlock => {
-                                    //no messages currently available to receive -- wait a while
-                                    thread::sleep(Duration::from_secs(1));
-                                    continue;
+                        Err(error) => {
+                            match error {
+                                mavlink::error::MessageReadError::Io(error) => {
+                                    if error.kind() == std::io::ErrorKind::WouldBlock {
+                                        //no messages currently available to receive -- wait a while
+                                        thread::sleep(Duration::from_secs(1));
+                                        continue;
+                                    }
                                 }
                                 _ => {
-                                    println!("recv error: {:?}", e);
+                                    println!("Got error: {:?}", error);
                                     break;
                                 }
                             }
