@@ -7,5 +7,5 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = "2.31"
-mavlink = "0.7"
+clap = "2.33.1"
+mavlink = { version = "0.8.5", features = [ "emit-extensions", "ardupilotmega"] }
