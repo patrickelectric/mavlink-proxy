@@ -8,4 +8,4 @@ edition = "2018"
 
 [dependencies]
 clap = "2.33.1"
-mavlink = { version = "0.8.5", features = [ "emit-extensions", "ardupilotmega"] }
+mavlink = { version = "0.9", features = [ "emit-extensions", "ardupilotmega"] }
