@@ -8,4 +8,7 @@ edition = "2018"
 
 [dependencies]
 clap = "2.33.1"
-mavlink = { version = "0.9", features = [ "emit-extensions", "ardupilotmega"] }
+crossbeam-channel = "0.5.1"
+mavlink = { git = "https://github.com/patrickelectric/rust-mavlink", branch = "serialport-rs", features = [ "emit-extensions", "ardupilotmega", "direct-serial"] }
+num_cpus = "1.13.0"
+threadpool = "1.8.1"

@@ -1,9 +1,12 @@
 use clap;
+use mavlink::ardupilotmega::MavMessage;
+use mavlink::MavHeader;
 
+use crossbeam_channel::unbounded;
 use std::sync::{Arc, RwLock};
-
 use std::thread;
 use std::time::Duration;
+use threadpool::ThreadPool;
 
 fn main() {
     let matches = clap::App::new(env!("CARGO_PKG_NAME"))
@@ -29,85 +32,73 @@ fn main() {
         )
         .get_matches();
 
-    let verbose = Arc::new(matches.is_present("verbose"));
-    let connection_strings: Vec<_> = matches.values_of("connect").unwrap().collect();
+    let verbose = matches.is_present("verbose");
+    let connection_strings: Vec<String> = matches
+        .values_of("connect")
+        .unwrap()
+        .map(Into::into)
+        .collect();
 
-    if *verbose {
-        for index in 0..connection_strings.len() {
-            println!(
-                "Connection: {} with index {}.",
-                connection_strings[index], index
-            );
-        }
-    }
+    let (sender, receiver) = unbounded::<(String, (MavHeader, MavMessage))>();
+    let pool = ThreadPool::with_name("mavlink worker".to_owned(), num_cpus::get());
+    println!("Connecting to: {:?}", &connection_strings);
+    for connection_string in connection_strings {
+        let sender = sender.clone();
+        let receiver = receiver.clone();
 
-    let vehicles: Arc<
-        Vec<
-            Arc<
-                RwLock<
-                    Box<
-                        dyn mavlink::MavConnection<mavlink::ardupilotmega::MavMessage>
-                            + Sync
-                            + Send,
-                    >,
-                >,
-            >,
-        >,
-    > = Arc::new(
-        connection_strings
-            .iter()
-            .map(|&connection_string| {
-                Arc::new(RwLock::new(mavlink::connect(&connection_string).unwrap()))
-            })
-            .collect(),
-    );
+        let mut vehicle: Box<
+            dyn mavlink::MavConnection<mavlink::ardupilotmega::MavMessage> + Sync + Send,
+        > = mavlink::connect(&connection_string).unwrap();
+        vehicle.set_protocol_version(mavlink::MavlinkVersion::V2);
+        let vehicle = Arc::new(vehicle);
 
-    let mut threads = vec![];
-    for index in 0..vehicles.len() {
-        threads.push(thread::spawn({
-            let verbose = Arc::clone(&verbose);
-            let vehicles = Arc::clone(&vehicles);
-            move || {
-                let vehicle = Arc::clone(&vehicles[index]);
-                let vehicle = vehicle.read().unwrap();
-                loop {
-                    match vehicle.recv() {
-                        Ok((header, msg)) => {
-                            if *verbose {
-                                println!("[{}] > {:#?}", index, msg);
-                            }
-                            for other_index in 0..vehicles.len() {
-                                if index != other_index {
-                                    if *verbose {
-                                        println!("[{}] < {:#?}", other_index, msg);
-                                    }
-                                    let vehicle = vehicles[other_index].read().unwrap();
-                                    let _ = vehicle.send(&header, &msg);
-                                }
-                            }
+        let vehicle_send = vehicle.clone();
+        let connection_string_send = connection_string.clone();
+        pool.execute(move || {
+            let connection_string: String = connection_string.into();
+            loop {
+                match vehicle.recv() {
+                    Ok((header, msg)) => {
+                        if verbose {
+                            println!("[{}] > {:#?}", &connection_string, msg);
                         }
-                        Err(error) => {
-                            match error {
-                                mavlink::error::MessageReadError::Io(error) => {
-                                    if error.kind() == std::io::ErrorKind::WouldBlock {
-                                        //no messages currently available to receive -- wait a while
-                                        thread::sleep(Duration::from_secs(1));
-                                        continue;
-                                    }
+                        sender.send((connection_string.clone(), (header, msg)));
+                    }
+                    Err(error) => {
+                        match error {
+                            mavlink::error::MessageReadError::Io(error) => {
+                                if error.kind() == std::io::ErrorKind::WouldBlock {
+                                    //no messages currently available to receive -- wait a while
+                                    thread::sleep(Duration::from_secs(1));
+                                    dbg!("block!");
+                                    continue;
                                 }
-                                _ => {
-                                    println!("Got error: {:?}", error);
-                                    break;
-                                }
+                            }
+                            _ => {
+                                println!("Got error: {:?}", error);
+                                break;
                             }
                         }
                     }
                 }
+                thread::sleep(Duration::from_millis(10));
             }
-        }));
+        });
+        pool.execute(move || loop {
+            let messages: Vec<_> = receiver.try_iter().collect();
+            for (name, (header, message)) in messages {
+                if name != connection_string_send {
+                    if verbose {
+                        println!("[{}] < {:#?}", connection_string_send, message);
+                    }
+                    vehicle_send.send(&header, &message);
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        });
     }
 
-    for handle in threads {
-        let _ = handle.join();
+    loop {
+        thread::sleep(Duration::from_secs(1));
     }
 }
